@@ -6,16 +6,25 @@ cluster → application, managed with OpenTofu, GitOps (ArgoCD) and CI/CD.
 This repo (`oci-infra`) is the first piece — the cloud layer. See
 [Repos](#repos) for the full picture.
 
-> **Status:** work in progress. Stage 0 (foundation) is done, Stage 1 is next.
-> See the [Roadmap](#roadmap).
+> **Status:** work in progress. Stage 0 (foundation) is done, Stage 1
+> (network, compute, cluster) is in progress. See the [Roadmap](#roadmap).
 
 ## Layout
 
 ```
 environments/
-  dev/            # per-env OpenTofu config (provider, backend, variables)
-run_tofu.sh       # wrapper: fmt → init → validate → plan/apply
-.env              # local secrets/vars, gitignored, sourced by run_tofu.sh
+  dev/
+    backend.tf          # s3 backend: skip_* flags and use_path_style for OCI
+    backend.hcl         # bucket, key, region of the state
+    provider.tf, versions.tf
+    main.tf             # calls the modules
+    variables.tf, outputs.tf
+    dev.auto.tfvars     # non-secret values for dev, loaded automatically
+modules/
+  network/              # VCN, internet gateway, route table, security list, subnet
+  compute/              # Always Free Ampere A1 VM (2 OCPU, 12 GB)
+run_tofu.sh             # wrapper: fmt → init → validate → plan/apply
+.env                    # local secrets, gitignored, sourced by run_tofu.sh
 ```
 
 State lives in an S3-compatible bucket (OCI Object Storage, bucket `tofu-state`,
@@ -39,66 +48,67 @@ below, then run:
 
 ### Environment variables
 
-`run_tofu.sh` loads `.env` automatically.
+Secrets and account-specific values go to `.env`. `run_tofu.sh` loads it
+automatically.
 
 ```bash
 # State backend (S3-compatible API of OCI Object Storage)
-AWS_ENDPOINT_URL_S3=https://<namespace>.compat.objectstorage.<region>.oraclecloud.com
-AWS_ACCESS_KEY_ID=          # Customer Secret Key: access key
-AWS_SECRET_ACCESS_KEY=      # Customer Secret Key: secret
+AWS_ENDPOINT_URL_S3=     # https://<namespace>.compat.objectstorage.<region>.oraclecloud.com; namespace: `oci os ns get`
+AWS_ACCESS_KEY_ID=       # Console → My profile → Customer secret keys → Generate (access key)
+AWS_SECRET_ACCESS_KEY=   # same place; shown only once at creation
 
 # OCI provider
-TF_VAR_region=
-TF_VAR_tenancy_ocid=
-TF_VAR_user_ocid=
-TF_VAR_fingerprint=
-TF_VAR_private_key_path=    # path only; the .pem file stays outside the repo
+TF_VAR_compartment_ocid= # Console → Identity → Compartments → Copy OCID (or tenancy OCID for root)
+TF_VAR_fingerprint=      # Console → My profile → API keys (shown next to the key)
+TF_VAR_private_key_path= # path only; the .pem file stays outside the repo
+TF_VAR_ssh_source_cidr=  # your public IP + /32, e.g. `echo "$(curl -s ifconfig.me)/32"`
+TF_VAR_tenancy_ocid=     # Console → My profile → Tenancy → Copy OCID (or ~/.oci/config)
+TF_VAR_user_ocid=        # Console → My profile → Copy OCID (or ~/.oci/config)
 ```
 
-Where to get the values:
+The Customer Secret Key is **not** the API key used by the provider. The
+AWS-style variable names are only there because the OpenTofu `s3` backend uses
+the AWS SDK; no AWS account or AWS CLI is needed.
 
-- **Namespace:** `oci os ns get`
-- **Customer Secret Key:** OCI console → user → *Customer secret keys*.
-  This is **not** the API key used by the provider.
-- **API key / fingerprint:** OCI console → user → *API keys*.
-
-The AWS-style variable names are only there because the OpenTofu `s3` backend
-uses the AWS SDK; no AWS account or AWS CLI is needed.
+Non-secret values (region, CIDRs, name prefix, SSH public key path) live in
+`environments/dev/dev.auto.tfvars` and are loaded automatically. Each variable
+is set in either `.env` or the tfvars file, never both.
 
 ## Usage
 
 ```bash
 ./run_tofu.sh            # plan for dev
-./run_tofu.sh apply      # apply for dev
+./run_tofu.sh apply      # apply for dev (OpenTofu asks for confirmation)
 ./run_tofu.sh plan prod  # plan for another env (needs environments/prod/, not created yet)
 ```
 
-`run_tofu.sh` runs, in order: `tofu fmt`, `tofu init`, `tofu validate`, then
-the requested action (`plan` by default).
-<!-- TODO: verify this matches the script; mention which -backend-config / -var-file it passes -->
+`run_tofu.sh` runs `tofu fmt`, `tofu init -reconfigure -backend-config=backend.hcl`,
+`tofu validate`, then the requested action (`plan` by default).
 
 Each environment must use its own backend `key` (e.g. `prod/terraform.tfstate`),
-otherwise environments overwrite each other's state.
-<!-- TODO: say where the key is set (backend.hcl or backend.tf) -->
+set in that environment's `backend.hcl`, otherwise environments overwrite each
+other's state.
 
 ## Limitations
 
 - Locking uses `use_lockfile` (conditional writes) on OCI's S3-compatible API,
-  which is not an AWS-native guarantee. Concurrent behavior is being verified
-  (see Stage 0).
+  which is not an AWS-native guarantee. It was checked with two parallel `plan`
+  runs, where the second one fails on the lock.
 - The S3 backend needs several `skip_*` flags and `use_path_style` to work
   with OCI; see `environments/dev/backend.tf`.
-  <!-- TODO: confirm the path, or point to backend.hcl if that's where they live -->
 - State is not encrypted yet; native OpenTofu state encryption is planned
-  (Stage 1), since OCI's S3-compat layer has no AWS SSE-KMS.
+  (Stage 1), since OCI's S3-compat layer has no AWS SSE-KMS. `sensitive`
+  variables are hidden in the output only, their values are still in the state.
+- The Always Free Ampere A1 allowance is 2 OCPUs and 12 GB in total, and
+  capacity in a region can run out ("Out of capacity" on `apply`).
 
 ## Repos
 
-| Repo | Contents | Change frequency |
-| - | - | - |
-| `oci-infra` | OpenTofu: network, cluster, buckets, IAM, ArgoCD bootstrap | rarely |
-| `k8s-gitops` | manifests for ArgoCD: platform and apps, per environment | often |
-| `demo-app` | app code, Dockerfile, tests, CI | most often |
+| Repo | Contents |
+| - | - |
+| `oci-infra` | OpenTofu: network, cluster, buckets, IAM, ArgoCD bootstrap |
+| `k8s-gitops` | manifests for ArgoCD: platform and apps, per environment |
+| `demo-app` | app code, Dockerfile, tests, CI |
 
 ## Roadmap
 
@@ -107,11 +117,14 @@ otherwise environments overwrite each other's state.
 - [x] State backend in OCI Object Storage (S3) with lockfile locking
 - [x] Verify locking: two parallel `plan` runs, the second must fail on the lock
 - [x] `oci-infra` skeleton with the `dev` environment
-- [x] First resource (namespace data source) as an end-to-end test
+- [x] End-to-end test of the backend and provider
 - [x] README with usage
 
 ### Stage 1: network and cluster (`oci-infra`)
 
+- [x] Modules: VCN, internet gateway, route table, security list, public subnet
+- [x] Always Free Ampere A1 VM (2 OCPU, 12 GB)
+- [ ] Compartment managed by OpenTofu instead of an existing OCID
 - [ ] Kubernetes cluster on an always-free OCI shape
 - [ ] Dedicated service user with a narrow IAM policy instead of the admin account
 - [ ] Native OpenTofu state encryption (`encryption {}` block)
