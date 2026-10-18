@@ -40,10 +40,10 @@ plan | apply) ;;
   ;;
 esac
 
-tofu fmt -recursive
+tofu fmt -recursive -no-color
 
-tofu -chdir="$ENV_DIR" init -reconfigure -backend-config=backend.hcl
+tofu -chdir="$ENV_DIR" init -reconfigure -backend-config=backend.hcl -input=false -no-color
 
-tofu -chdir="$ENV_DIR" validate
+tofu -chdir="$ENV_DIR" validate -no-color
 
-tofu -chdir="$ENV_DIR" "$ACTION"
+tofu -chdir="$ENV_DIR" "$ACTION" -no-color
