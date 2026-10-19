@@ -11,7 +11,7 @@ This repo (`oci-infra`) is the first piece — the cloud layer. See
 
 ## Layout
 
-```
+```bash
 environments/
   dev/
     backend.tf          # s3 backend: skip_* flags and use_path_style for OCI
@@ -39,8 +39,11 @@ key `dev/terraform.tfstate`), reached through `AWS_ENDPOINT_URL_S3`.
 
 ## Setup
 
-Create a `.env` file in the repo root (it is gitignored) with the variables
-below, then run:
+1. Configure the OCI CLI once (`oci setup config`) — the provider reads
+   `~/.oci/config`, profile `DEFAULT` (user OCID, fingerprint, key path,
+   tenancy, region). See `provider.tf`.
+2. Create a `.env` file in the repo root with the variables below.
+3. Run:
 
 ```bash
 ./run_tofu.sh
@@ -54,23 +57,22 @@ automatically.
 ```bash
 # State backend (S3-compatible API of OCI Object Storage)
 AWS_ENDPOINT_URL_S3=     # https://<namespace>.compat.objectstorage.<region>.oraclecloud.com; namespace: `oci os ns get`
-AWS_ACCESS_KEY_ID=       # Console → My profile → Customer secret keys → Generate (access key)
+AWS_ACCESS_KEY_ID=       # Profile → User settings → Tokens and keys → Generate secret key
 AWS_SECRET_ACCESS_KEY=   # same place; shown only once at creation
 
-# OCI provider
-TF_VAR_compartment_ocid= # Console → Identity → Compartments → Copy OCID (or tenancy OCID for root)
-TF_VAR_fingerprint=      # Console → My profile → API keys (shown next to the key)
-TF_VAR_private_key_path= # path only; the .pem file stays outside the repo
+# OpenTofu variables
+TF_VAR_tenancy_ocid=     # Console → My profile → Tenancy → Copy OCID
 TF_VAR_ssh_source_cidr=  # your public IP + /32, e.g. `echo "$(curl -s ifconfig.me)/32"`
-TF_VAR_tenancy_ocid=     # Console → My profile → Tenancy → Copy OCID (or ~/.oci/config)
-TF_VAR_user_ocid=        # Console → My profile → Copy OCID (or ~/.oci/config)
 ```
 
 The Customer Secret Key is **not** the API key used by the provider. The
 AWS-style variable names are only there because the OpenTofu `s3` backend uses
 the AWS SDK; no AWS account or AWS CLI is needed.
 
-Non-secret values (region, CIDRs, name prefix, SSH public key path) live in
+Provider credentials (user OCID, fingerprint, private key path, region) come
+from `~/.oci/config` — outside the repo; no key material in `.env`.
+
+Non-secret values (CIDRs, name prefix, SSH public key path) live in
 `environments/dev/dev.auto.tfvars` and are loaded automatically. Each variable
 is set in either `.env` or the tfvars file, never both.
 
@@ -79,7 +81,7 @@ is set in either `.env` or the tfvars file, never both.
 ```bash
 ./run_tofu.sh            # plan for dev
 ./run_tofu.sh apply      # apply for dev (OpenTofu asks for confirmation)
-./run_tofu.sh plan prod  # plan for another env (needs environments/prod/, not created yet)
+./run_tofu.sh plan prod  # plan for another env (not implemented yet)
 ```
 
 `run_tofu.sh` runs `tofu fmt`, `tofu init -reconfigure -backend-config=backend.hcl`,
@@ -124,7 +126,7 @@ other's state.
 
 - [x] Modules: VCN, internet gateway, route table, security list, public subnet
 - [x] Always Free Ampere A1 VM (2 OCPU, 12 GB)
-- [ ] Compartment managed by OpenTofu instead of an existing OCID
+- [x] Compartment managed by OpenTofu instead of an existing OCID
 - [ ] Kubernetes cluster on an always-free OCI shape
 - [ ] Dedicated service user with a narrow IAM policy instead of the admin account
 - [ ] Native OpenTofu state encryption (`encryption {}` block)
@@ -142,7 +144,8 @@ other's state.
 - [ ] cert-manager (TLS)
 - [ ] External Secrets (from OCI Vault) or SOPS — no secrets in the repo
 - [ ] Monitoring: Prometheus + Grafana
-- [ ] Directory layout: `platform/`, `apps/`, separate overlays per environment (directories, not branches)
+- [ ] Directory layout: `platform/`, `apps/`, separate overlays per environment
+  (directories, not branches)
 
 ### Stage 4: app and CI (`demo-app`)
 
@@ -156,7 +159,8 @@ other's state.
 - [ ] `plan` on pull requests, result posted as a comment
 - [ ] `apply` after merge, with manual approval for `prod`
 - [ ] Auth via OIDC or platform secrets, no keys in the repo
-- [ ] `tofu fmt -check`, `validate`, `shellcheck`, `tflint`, `trivy config` in the pipeline
+- [ ] `tofu fmt -check`, `validate`, `shellcheck`, `tflint`, `trivy config` in
+  the pipeline
 
 ### Stage 6: polish
 
